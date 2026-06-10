@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+    "jsxImportSource": "vue",
+    "types": ["node", "chrome"],
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+    "baseUrl": "."
+  },
+  "include": ["src/**/*", "wxt.config.ts"],
+  "exclude": [".output", ".wxt", "dist"]
+}

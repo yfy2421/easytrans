@@ -1,0 +1,38 @@
+# 依赖
+node_modules/
+
+# 构建产出
+.output/
+.wxt/
+dist/
+
+# IDE
+.vscode/
+.idea/
+
+# 环境
+.env
+.env.local
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# MCP
+.mcp.json
+
+# 日志
+*.log
+
+# 测试
+tests/
+test-results/
+
+# E2E 浏览器数据
+.playwright-user-data/
+
+# 参考项目
+old-immersive-translate-main/
+
+# 人工复核
+人工复核测试.md

@@ -1,0 +1,43 @@
+{
+  "name": "bianyi-translate",
+  "description": "便捷翻译 — 轻量、开源、零追踪的双语对照翻译浏览器扩展",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wxt",
+    "dev:firefox": "wxt -b firefox",
+    "build": "wxt build",
+    "build:firefox": "wxt build -b firefox",
+    "zip": "wxt zip",
+    "zip:firefox": "wxt zip -b firefox",
+    "test": "vitest",
+    "test:e2e": "playwright test",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "dompurify": "^3.1.0",
+    "idb-keyval": "^6.2.1",
+    "vue": "^3.5.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "@playwright/test": "^1.45.0",
+    "@types/dompurify": "^3.0.5",
+    "@types/node": "^22.0.0",
+    "@vitejs/plugin-vue": "^5.1.0",
+    "@vue/test-utils": "^2.4.5",
+    "@vueuse/core": "^11.0.0",
+    "eslint": "^9.0.0",
+    "eslint-config-prettier": "^9.1.2",
+    "eslint-plugin-vue": "^9.33.0",
+    "jsdom": "^24.0.0",
+    "prettier": "^3.3.0",
+    "typescript": "^5.5.0",
+    "typescript-eslint": "^8.61.0",
+    "vitest": "^2.0.0",
+    "vue-eslint-parser": "^9.4.3",
+    "wxt": "^0.19.0"
+  }
+}
