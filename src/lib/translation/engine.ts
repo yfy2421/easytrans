@@ -107,14 +107,14 @@ export class TranslationEngine {
   }
 
   /** Replace mode: chunk-level with <a> tags. Parse tags in result to split translation
-   *  across nodes — each node gets its corresponding segment. */
+   *  across nodes — each node gets its corresponding segment.
+   *  Link text comes directly from Google's <a> tag content (in-context translation). */
   private async translateReplace(
     chunks: TextChunk[],
     cacheKey: (text: string) => string,
     targetLang: string,
     onProgress?: (phase: 'extract' | 'translate' | 'apply' | 'done') => void,
   ): Promise<void> {
-    // Cache split at chunk level, keyed by HTML-formatted text
     const cached: { chunk: TextChunk; translated: string }[] = [];
     const uncached: TextChunk[] = [];
     for (const c of chunks) {
@@ -124,8 +124,8 @@ export class TranslationEngine {
       else uncached.push(c);
     }
 
-    // Pre-translate link words (needed for both cached and fresh chunks)
-    const wordTransMap = new Map<string, string>();
+    // Pre-translate link words as fallback for when Google mangles <a> tags
+    const wordFallback = new Map<string, string>();
     const allLinkWords = [...new Set(chunks.flatMap(extractLinkWords))];
     if (allLinkWords.length > 0) {
       const wr = await browser.runtime.sendMessage({
@@ -134,14 +134,14 @@ export class TranslationEngine {
       }).catch(() => null) as TranslateResponseMsg | null;
       if (wr?.translations) {
         for (let i = 0; i < allLinkWords.length; i++) {
-          wordTransMap.set(allLinkWords[i], wr.translations[i]?.translated || allLinkWords[i]);
+          wordFallback.set(allLinkWords[i], wr.translations[i]?.translated || allLinkWords[i]);
         }
       }
     }
 
     // Apply cached chunks immediately
     for (const { chunk, translated } of cached) {
-      applyChunkWithATags(chunk, translated, wordTransMap);
+      applyChunkWithATags(chunk, translated, wordFallback);
     }
 
     if (uncached.length === 0) {
@@ -155,7 +155,7 @@ export class TranslationEngine {
     const sendList = uncached.map((c) => ({ text: buildHtmlText(c), meta: { chunk: c } }));
 
     await this.dispatchBatches(sendList, cacheKey, targetLang, (translated, meta) => {
-      applyChunkWithATags(meta.chunk, translated, wordTransMap);
+      applyChunkWithATags(meta.chunk, translated, wordFallback);
     });
 
     this.stopKeepalive();
@@ -224,69 +224,56 @@ function buildHtmlText(chunk: TextChunk): string {
     .join('');
 }
 
-/** Split translated text by <a> tag positions. E.g.
- *  "<a>宙斯</a>婴儿期的护士" → ["", "宙斯", "婴儿期的护士"] */
-function parseATagSegments(text: string): string[] {
-  const segments: string[] = [];
+/** Parse translated text into typed segments. Each segment knows whether it
+ *  came from inside an <a> tag (link) or between tags (text). */
+function parseTypedSegments(text: string): { isLink: boolean; text: string }[] {
+  const segments: { isLink: boolean; text: string }[] = [];
   const re = /<a>(.+?)<\/a>/g;
   let lastIndex = 0;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
-    segments.push(text.slice(lastIndex, m.index));
-    segments.push(m[1]);
+    segments.push({ isLink: false, text: text.slice(lastIndex, m.index) });
+    segments.push({ isLink: true, text: m[1] });
     lastIndex = m.index + m[0].length;
   }
-  segments.push(text.slice(lastIndex));
+  segments.push({ isLink: false, text: text.slice(lastIndex) });
   return segments;
 }
 
-/** Distribute translated segments across chunk nodes, matching <a> positions */
+/** Distribute typed segments across chunk nodes by matching type (link→link, text→text).
+ *  Falls back to wordFallback for link nodes Google's <a> restructuring drops. */
 function applyChunkWithATags(
   chunk: TextChunk,
   translated: string,
-  wordTransMap: Map<string, string>,
+  wordFallback: Map<string, string>,
 ): void {
-  const segments = parseATagSegments(translated);
+  const segments = parseTypedSegments(translated);
   const nodes = chunk.nodes.filter((n) => isReplaceable(n as Text));
 
-  for (let i = 0; i < nodes.length && i < segments.length; i++) {
-    const node = nodes[i] as Text;
-    let text = segments[i].trim();
-    // Link node: prefer individually translated word for consistency
-    if (node.parentElement?.closest('a')) {
-      const w = wordTransMap.get(node.textContent?.trim() || '');
-      if (w) text = w;
+  let segIdx = 0;
+  for (const node of nodes) {
+    const wantLink = !!node.parentElement?.closest('a');
+    while (segIdx < segments.length && segments[segIdx].isLink !== wantLink) {
+      segIdx++;
     }
-    // Always apply — empty segment means the original text was absorbed
-    // into another segment by Google's reordering (e.g. "The " → gone)
-    replaceTextNodes([{ node, translatedText: text }]);
-  }
-  // If Google dropped <a> tags (segments < nodes), clear leftover non-link nodes
-  for (let i = segments.length; i < nodes.length; i++) {
-    const node = nodes[i] as Text;
-    if (!node.parentElement?.closest('a')) {
-      replaceTextNodes([{ node, translatedText: '' }]);
-    }
-  }
-  // If Google added extra segments (segments > nodes), append to last non-link node
-  for (let i = nodes.length; i < segments.length; i++) {
-    const trimmed = segments[i].trim();
-    if (!trimmed) continue;
-    // Find last non-link node to append to
-    for (let j = nodes.length - 1; j >= 0; j--) {
-      const node = nodes[j] as Text;
-      if (!node.parentElement?.closest('a')) {
-        const current = node.textContent || '';
-        replaceTextNodes([{ node, translatedText: current + trimmed }]);
-        break;
-      }
+    if (segIdx < segments.length) {
+      const text = segments[segIdx].text.trim();
+      replaceTextNodes([{ node: node as Text, translatedText: text }]);
+      segIdx++;
+    } else if (wantLink) {
+      // Google mangled this <a> tag — use individually translated fallback
+      const original = node.textContent?.trim() || '';
+      const fallback = wordFallback.get(original) || original;
+      replaceTextNodes([{ node: node as Text, translatedText: fallback }]);
+    } else {
+      replaceTextNodes([{ node: node as Text, translatedText: '' }]);
     }
   }
 }
 
 // ── helpers ──
 
-/** Extract link text from chunk nodes (for individual word translation in replace mode) */
+/** Extract link text from chunk nodes (for wordFallback when Google mangles <a>) */
 function extractLinkWords(chunk: TextChunk): string[] {
   const words: string[] = [];
   for (const n of chunk.nodes) {

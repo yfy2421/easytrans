@@ -41,6 +41,7 @@ export function replaceTextNodes(
   const done = new Set<Text>();
   for (const { node, translatedText } of entries) {
     if (!isReplaceable(node) || done.has(node)) continue;
+    if (originalMap.has(node)) continue; // already translated, skip overwrite
     originalMap.set(node, node.textContent || '');
     node.textContent = translatedText;
     done.add(node);
