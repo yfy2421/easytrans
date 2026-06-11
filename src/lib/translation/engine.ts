@@ -56,8 +56,23 @@ export class TranslationEngine {
 
     if (chunks.length === 0) { onProgress?.('done'); return; }
 
-    // ── 2. Cache split (mode-specific key to avoid cross-mode pollution) ──
+    // ── 2. Cache split ──
     const cacheKey = (text: string) => `${mode}::${text}::${targetLang}`;
+
+    if (isAppend) {
+      return this.translateAppend(chunks, cacheKey, targetLang, onProgress);
+    } else {
+      return this.translateReplace(chunks, cacheKey, targetLang, onProgress);
+    }
+  }
+
+  /** Append mode: chunk-level translation + inject below original */
+  private async translateAppend(
+    chunks: TextChunk[],
+    cacheKey: (text: string) => string,
+    targetLang: string,
+    onProgress?: (phase: 'extract' | 'translate' | 'apply' | 'done') => void,
+  ): Promise<void> {
     const cached: { chunk: TextChunk; translated: string }[] = [];
     const uncached: TextChunk[] = [];
     for (const c of chunks) {
@@ -66,45 +81,102 @@ export class TranslationEngine {
       else uncached.push(c);
     }
 
-    // All cached, no API needed
     if (uncached.length === 0) {
-      if (mode === 'append') {
-        injectTranslations(cached.map(({ chunk, translated }) => ({ chunk, translatedText: translated })));
-      }
+      injectTranslations(cached.map(({ chunk, translated }) => ({ chunk, translatedText: translated })));
       onProgress?.('done');
       return;
     }
 
-    // ── 3. Send to API ──
     onProgress?.('translate');
     this.startKeepalive();
 
-    const sendList = isAppend
-      ? uncached.map((c) => ({ text: c.text, meta: { chunk: c } }))
-      : uncached.flatMap((c) =>
-          c.nodes
-            .filter((n) => isReplaceable(n) && (n.textContent?.trim()?.length ?? 0) >= 3)
-            .map((n) => {
-              const text = n.textContent!.trim();
-              const hit = this.cache.get(cacheKey(text));
-              // Apply cached node translation immediately
-              if (hit) { replaceTextNodes([{ node: n, translatedText: hit }]); return null; }
-              return { text, meta: { chunk: c, node: n } };
-            })
-            .filter((x): x is NonNullable<typeof x> => x !== null),
-        );
+    const sendList = uncached.map((c) => ({ text: c.text, meta: { chunk: c } }));
+    const appendEntries: { chunk: TextChunk; translatedText: string }[] =
+      cached.map(({ chunk, translated }) => ({ chunk, translatedText: translated }));
 
-    const appendEntries: { chunk: TextChunk; translatedText: string }[] = isAppend
-      ? cached.map(({ chunk, translated }) => ({ chunk, translatedText: translated }))
-      : [];
+    await this.dispatchBatches(sendList, cacheKey, targetLang, (translated, meta) => {
+      appendEntries.push({ chunk: meta.chunk, translatedText: translated });
+    });
 
-    // Split into concurrent batches
+    this.stopKeepalive();
+    if (this.cancelled) return;
+
+    onProgress?.('apply');
+    injectTranslations(appendEntries.filter((e) => e.translatedText));
+    onProgress?.('done');
+  }
+
+  /** Replace mode: chunk-level with <a> tags. Parse tags in result to split translation
+   *  across nodes — each node gets its corresponding segment. */
+  private async translateReplace(
+    chunks: TextChunk[],
+    cacheKey: (text: string) => string,
+    targetLang: string,
+    onProgress?: (phase: 'extract' | 'translate' | 'apply' | 'done') => void,
+  ): Promise<void> {
+    // Cache split at chunk level, keyed by HTML-formatted text
+    const cached: { chunk: TextChunk; translated: string }[] = [];
+    const uncached: TextChunk[] = [];
+    for (const c of chunks) {
+      const key = cacheKey(buildHtmlText(c));
+      const hit = this.cache.get(key);
+      if (hit) cached.push({ chunk: c, translated: hit });
+      else uncached.push(c);
+    }
+
+    // Pre-translate link words (needed for both cached and fresh chunks)
+    const wordTransMap = new Map<string, string>();
+    const allLinkWords = [...new Set(chunks.flatMap(extractLinkWords))];
+    if (allLinkWords.length > 0) {
+      const wr = await browser.runtime.sendMessage({
+        type: 'TRANSLATE_REQUEST', texts: allLinkWords,
+        sourceLang: 'auto', targetLang, engine: 'google',
+      }).catch(() => null) as TranslateResponseMsg | null;
+      if (wr?.translations) {
+        for (let i = 0; i < allLinkWords.length; i++) {
+          wordTransMap.set(allLinkWords[i], wr.translations[i]?.translated || allLinkWords[i]);
+        }
+      }
+    }
+
+    // Apply cached chunks immediately
+    for (const { chunk, translated } of cached) {
+      applyChunkWithATags(chunk, translated, wordTransMap);
+    }
+
+    if (uncached.length === 0) {
+      onProgress?.('done');
+      return;
+    }
+
+    onProgress?.('translate');
+    this.startKeepalive();
+
+    const sendList = uncached.map((c) => ({ text: buildHtmlText(c), meta: { chunk: c } }));
+
+    await this.dispatchBatches(sendList, cacheKey, targetLang, (translated, meta) => {
+      applyChunkWithATags(meta.chunk, translated, wordTransMap);
+    });
+
+    this.stopKeepalive();
+    if (this.cancelled) return;
+
+    onProgress?.('apply');
+    onProgress?.('done');
+  }
+
+  /** Send texts to API in concurrent batches, calling onResult for each item */
+  private async dispatchBatches(
+    sendList: { text: string; meta: any }[],
+    cacheKey: (text: string) => string,
+    targetLang: string,
+    onResult: (translated: string, meta: any) => void,
+  ): Promise<void> {
     const batchList: { batch: typeof sendList; index: number }[] = [];
     for (let i = 0; i < sendList.length && !this.cancelled; i += CONCURRENT_BATCH_SIZE) {
       batchList.push({ batch: sendList.slice(i, i + CONCURRENT_BATCH_SIZE), index: i });
     }
 
-    // Concurrent batch dispatch — results applied as each batch returns
     await Promise.all(
       batchList.map(async ({ batch, index }) => {
         if (this.cancelled) return;
@@ -119,28 +191,13 @@ export class TranslationEngine {
           for (let j = 0; j < batch.length; j++) {
             const translated = r.translations[j]?.translated || '';
             if (translated) this.cache.set(cacheKey(batch[j].text), translated);
-
-            if (isAppend) {
-              appendEntries.push({ chunk: batch[j].meta.chunk, translatedText: translated });
-            } else if (batch[j].meta.node && translated) {
-              replaceTextNodes([{ node: batch[j].meta.node!, translatedText: translated }]);
-            }
+            if (translated) onResult(translated, batch[j].meta);
           }
         } catch (err) {
           console.warn(`[TranslationEngine] Batch ${n} failed:`, err);
         }
       }),
     );
-
-    this.stopKeepalive();
-    if (this.cancelled) return;
-
-    // ── 4. Apply (append mode: all at once) ──
-    onProgress?.('apply');
-    if (isAppend) {
-      injectTranslations(appendEntries.filter((e) => e.translatedText));
-    }
-    onProgress?.('done');
   }
 
   private startKeepalive(): void {
@@ -154,7 +211,91 @@ export class TranslationEngine {
   }
 }
 
+// ── <a> tag helpers (replace mode) ──
+
+/** Wrap <a> text in actual <a> tags. Google preserves them (verified 11/11). */
+function buildHtmlText(chunk: TextChunk): string {
+  return chunk.nodes
+    .map((n) => {
+      const t = n.textContent || '';
+      if (!t.trim()) return t;
+      return n.parentElement?.closest('a') ? `<a>${t.trim()}</a>` : t;
+    })
+    .join('');
+}
+
+/** Split translated text by <a> tag positions. E.g.
+ *  "<a>宙斯</a>婴儿期的护士" → ["", "宙斯", "婴儿期的护士"] */
+function parseATagSegments(text: string): string[] {
+  const segments: string[] = [];
+  const re = /<a>(.+?)<\/a>/g;
+  let lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    segments.push(text.slice(lastIndex, m.index));
+    segments.push(m[1]);
+    lastIndex = m.index + m[0].length;
+  }
+  segments.push(text.slice(lastIndex));
+  return segments;
+}
+
+/** Distribute translated segments across chunk nodes, matching <a> positions */
+function applyChunkWithATags(
+  chunk: TextChunk,
+  translated: string,
+  wordTransMap: Map<string, string>,
+): void {
+  const segments = parseATagSegments(translated);
+  const nodes = chunk.nodes.filter((n) => isReplaceable(n as Text));
+
+  for (let i = 0; i < nodes.length && i < segments.length; i++) {
+    const node = nodes[i] as Text;
+    let text = segments[i].trim();
+    // Link node: prefer individually translated word for consistency
+    if (node.parentElement?.closest('a')) {
+      const w = wordTransMap.get(node.textContent?.trim() || '');
+      if (w) text = w;
+    }
+    // Always apply — empty segment means the original text was absorbed
+    // into another segment by Google's reordering (e.g. "The " → gone)
+    replaceTextNodes([{ node, translatedText: text }]);
+  }
+  // If Google dropped <a> tags (segments < nodes), clear leftover non-link nodes
+  for (let i = segments.length; i < nodes.length; i++) {
+    const node = nodes[i] as Text;
+    if (!node.parentElement?.closest('a')) {
+      replaceTextNodes([{ node, translatedText: '' }]);
+    }
+  }
+  // If Google added extra segments (segments > nodes), append to last non-link node
+  for (let i = nodes.length; i < segments.length; i++) {
+    const trimmed = segments[i].trim();
+    if (!trimmed) continue;
+    // Find last non-link node to append to
+    for (let j = nodes.length - 1; j >= 0; j--) {
+      const node = nodes[j] as Text;
+      if (!node.parentElement?.closest('a')) {
+        const current = node.textContent || '';
+        replaceTextNodes([{ node, translatedText: current + trimmed }]);
+        break;
+      }
+    }
+  }
+}
+
 // ── helpers ──
+
+/** Extract link text from chunk nodes (for individual word translation in replace mode) */
+function extractLinkWords(chunk: TextChunk): string[] {
+  const words: string[] = [];
+  for (const n of chunk.nodes) {
+    if (n.parentElement?.closest('a') && n.textContent?.trim()) {
+      words.push(n.textContent.trim());
+    }
+  }
+  return words;
+}
 
 function resolveScope(doc: Document, skipUi: boolean): HTMLElement {
   if (skipUi) {

@@ -23,64 +23,6 @@ export default defineContentScript({
   async main() {
     console.log('[便捷翻译] Content script loaded');
 
-    // TEMP: marker format comparison — run from popup or translate button
-    const runMarkerTest = async () => {
-      const word = 'nymph';
-      const markers: Record<string, string> = {
-        'bare_a':       `<a>${word}</a>`,
-        'angle_num':    `⟨1⟩${word}⟨1⟩`,
-        'at_pct_hash':  `@%1#$ ${word} @%1#$`,
-        'reverse_k':    `kkkd${word}dkkk`,
-        'double_brace': `{{1}}${word}{{1}}`,
-        'dollar_num':   `$1$ ${word} $1$`,
-      };
-      const texts = Object.entries(markers).map(([name, marked]) => `Amalthea is described as a ${marked} who raises the child`);
-      const names = Object.keys(markers);
-
-      const r = await browser.runtime.sendMessage({
-        type: 'TRANSLATE_REQUEST', texts,
-        sourceLang: 'en', targetLang: 'zh', engine: 'google',
-      });
-
-      for (let i = 0; i < names.length; i++) {
-        const out = r.translations[i]?.translated || '';
-        const intact = out.includes(word) || out.includes('仙女');
-        console.log(`${names[i].padEnd(14)} IN:  ${markers[names[i]]}`);
-        console.log(' '.repeat(14) + `OUT: ${out}`);
-        console.log(' '.repeat(14) + `     ${intact ? '✅ intact' : '❌ broken'}`);
-        console.log('');
-      }
-    };
-    // Test <a> tag preservation on real content (run once after page load)
-    const runATagTest = () => {
-      const paras = Array.from(document.querySelectorAll('p')).filter(
-        (p) => p.querySelector('a') && (p.textContent?.length ?? 0) > 100,
-      );
-      if (paras.length === 0) return;
-      const p = paras[0];
-      const parts: string[] = [];
-      const walker = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
-      let node: Text | null;
-      while ((node = walker.nextNode() as Text | null)) {
-        const t = node.textContent || '';
-        if (!t.trim()) continue;
-        parts.push(node.parentElement?.closest('a') ? `<a>${t.trim()}</a>` : t);
-      }
-      const htmlText = parts.join('');
-      browser.runtime.sendMessage({
-        type: 'TRANSLATE_REQUEST', texts: [htmlText],
-        sourceLang: 'en', targetLang: 'zh', engine: 'google',
-      }).then((r: any) => {
-        const out = r.translations[0]?.translated || '';
-        console.log('[<a> test] IN: ', htmlText.slice(0, 250));
-        console.log('[<a> test] OUT:', out.slice(0, 350));
-        const inC = (htmlText.match(/<a>/g) || []).length;
-        const outC = (out.match(/<a>/g) || []).length;
-        console.log(`[<a> test] <a> tags: ${inC}→${outC} ${inC === outC ? '✅ ALL PRESERVED' : '❌ MISMATCH'}`);
-      }).catch((e: any) => console.error('[<a> test] Failed:', e));
-    };
-    setTimeout(runATagTest, 2000);
-
     const settings = await browser.storage.local.get(['targetLang', 'translationMode']);
     if (settings.targetLang) targetLang = settings.targetLang as string;
     if (settings.translationMode) mode = settings.translationMode as TranslationMode;
@@ -93,7 +35,7 @@ export default defineContentScript({
     ball.onTranslate(() => doTranslate());
     ball.onRestore(() => restore());
     ball.onCancel(() => engine.cancel());
-    ball.onSettings(() => browser.runtime.openOptionsPage());
+    ball.onSettings(() => chrome.runtime.openOptionsPage());
     ball.setModeMenuLabel(mode);
     ball.onModeToggle(() => {
       mode = mode === 'append' ? 'replace' : 'append';
@@ -130,6 +72,7 @@ export default defineContentScript({
 });
 
 async function doTranslate(): Promise<void> {
+  lastTranslateTime = Date.now();
   ball.setTranslating(true);
   try {
     await engine.translate(document);
@@ -137,7 +80,6 @@ async function doTranslate(): Promise<void> {
     console.error('[便捷翻译] Failed:', err);
   }
   isTranslated = true;
-  lastTranslateTime = Date.now();
   ball.setTranslated(true);
   ball.setTranslating(false);
 }
