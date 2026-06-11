@@ -25,18 +25,18 @@ export function matchRule(url: string): MatchedRule | null {
   const hostname = urlObj.hostname;
 
   for (const rule of BUILTIN_RULES) {
-    // Hostname match
+    // Hostname OR regex: if both specified, matching either is sufficient.
+    let matched = false;
+
     if (rule.hostname) {
       const hosts = Array.isArray(rule.hostname) ? rule.hostname : [rule.hostname];
-      if (!hosts.some((h) => hostname === h || hostname.endsWith('.' + h))) continue;
+      if (hosts.some((h) => hostname === h || hostname.endsWith('.' + h))) matched = true;
     }
-    // Regex match
     if (rule.regex) {
       const regexes = Array.isArray(rule.regex) ? rule.regex : [rule.regex];
-      if (!regexes.some((r) => new RegExp(r).test(url))) continue;
+      if (regexes.some((r) => new RegExp(r).test(url))) matched = true;
     }
-    // If neither hostname nor regex specified, skip (doesn't match)
-    if (!rule.hostname && !rule.regex) continue;
+    if (!matched) continue;
 
     return {
       rule,

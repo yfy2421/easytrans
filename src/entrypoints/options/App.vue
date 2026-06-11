@@ -1,37 +1,32 @@
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue';
+import { getSettings, setSetting } from '@/lib/storage/settings';
+import LanguageSelector from '@/components/LanguageSelector.vue';
+import EngineSelector from '@/components/EngineSelector.vue';
+import type { TranslationEngine } from '@/lib/translator/types';
 
 const version = browser.runtime.getManifest().version;
 
-interface LangOption {
-  value: string;
-  label: string;
-}
+const targetLang = ref('zh');
+const engine = ref<TranslationEngine>('google');
 
-const LANGUAGES: LangOption[] = [
-  { value: 'zh', label: '中文（简体）' },
-  { value: 'zh-TW', label: '中文（繁体）' },
-  { value: 'en', label: 'English' },
-  { value: 'ja', label: '日本語' },
-  { value: 'ko', label: '한국어' },
-  { value: 'fr', label: 'Français' },
-  { value: 'de', label: 'Deutsch' },
-  { value: 'es', label: 'Español' },
-  { value: 'ru', label: 'Русский' },
+const engines = [
+  {
+    type: 'google' as TranslationEngine,
+    name: 'Google 翻译',
+    badge: '免费',
+    desc: '无需 API Key，直接使用。更多引擎（DeepL、Claude、OpenAI）即将推出。',
+  },
 ];
 
-const targetLang = ref('zh');
-
 onMounted(async () => {
-  const data = await browser.storage.local.get('targetLang');
-  if (data.targetLang) {
-    targetLang.value = data.targetLang as string;
-  }
+  const settings = await getSettings();
+  targetLang.value = settings.targetLang;
+  engine.value = settings.translationEngine;
 });
 
-watch(targetLang, (val) => {
-  browser.storage.local.set({ targetLang: val });
-});
+watch(targetLang, (val) => setSetting('targetLang', val));
+watch(engine, (val) => setSetting('translationEngine', val));
 </script>
 
 <template>
@@ -41,23 +36,12 @@ watch(targetLang, (val) => {
 
     <section>
       <h2>目标语言</h2>
-      <label for="target-lang">翻译为：</label>
-      <select id="target-lang" v-model="targetLang">
-        <option v-for="lang in LANGUAGES" :key="lang.value" :value="lang.value">
-          {{ lang.label }}
-        </option>
-      </select>
+      <LanguageSelector v-model="targetLang" />
     </section>
 
     <section>
       <h2>翻译引擎</h2>
-      <div class="engine-list">
-        <div class="engine-item engine-item--active">
-          <span class="engine-name">Google 翻译</span>
-          <span class="engine-badge">免费</span>
-          <p class="engine-desc">无需 API Key，直接使用。更多引擎（DeepL、Claude、OpenAI）即将推出。</p>
-        </div>
-      </div>
+      <EngineSelector v-model="engine" :engines="engines" />
     </section>
 
     <section>
@@ -96,50 +80,5 @@ section h2 {
   font-size: 14px;
   margin: 0 0 10px;
   color: #333;
-}
-label {
-  font-size: 13px;
-  margin-right: 8px;
-}
-select {
-  padding: 4px 8px;
-  border: 1px solid #d1d5db;
-  border-radius: 4px;
-  font-size: 13px;
-}
-.engine-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.engine-item {
-  padding: 10px;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.engine-item--active {
-  border-color: #4f46e5;
-  background: #f5f3ff;
-}
-.engine-name {
-  font-weight: 600;
-  font-size: 14px;
-}
-.engine-badge {
-  font-size: 11px;
-  padding: 1px 6px;
-  border-radius: 3px;
-  background: #10b981;
-  color: #fff;
-}
-.engine-desc {
-  width: 100%;
-  margin: 4px 0 0;
-  font-size: 12px;
-  color: #888;
 }
 </style>

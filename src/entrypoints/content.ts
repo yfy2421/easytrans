@@ -6,6 +6,7 @@ import { detectPageLanguage } from '@/lib/dom/language-detect';
 import { TopBar } from '@/lib/dom/top-bar';
 import { ContentObserver } from '@/lib/dom/observer';
 import { TranslationEngine, type TranslationMode } from '@/lib/translation/engine';
+import { getSettings, getNeverTranslate, addNeverTranslate, setSetting } from '@/lib/storage/settings';
 import type { PopupMessage } from '@/lib/messages';
 
 let isTranslated = false;
@@ -23,11 +24,15 @@ export default defineContentScript({
   async main() {
     console.log('[便捷翻译] Content script loaded');
 
-    const settings = await browser.storage.local.get(['targetLang', 'translationMode']);
-    if (settings.targetLang) targetLang = settings.targetLang as string;
-    if (settings.translationMode) mode = settings.translationMode as TranslationMode;
+    const settings = await getSettings();
+    targetLang = settings.targetLang;
+    mode = settings.translationMode;
 
-    engine = new TranslationEngine({ mode, targetLang });
+    engine = new TranslationEngine({
+      mode,
+      targetLang,
+      engine: settings.translationEngine,
+    });
 
     // Floating ball
     ball = new FloatingBall();
@@ -39,7 +44,7 @@ export default defineContentScript({
     ball.setModeMenuLabel(mode);
     ball.onModeToggle(() => {
       mode = mode === 'append' ? 'replace' : 'append';
-      browser.storage.local.set({ translationMode: mode });
+      setSetting('translationMode', mode);
       ball.setModeMenuLabel(mode);
       engine.setMode(mode);
       if (isTranslated) { restore(); doTranslate(); }
@@ -48,14 +53,14 @@ export default defineContentScript({
     // Top bar
     const topBar = new TopBar();
     topBar.onTranslate(() => doTranslate());
-    topBar.onNeverTranslate(() => rememberNeverTranslate());
+    topBar.onNeverTranslate(() => { addNeverTranslate(location.hostname); });
     const neverSites = await getNeverTranslate();
     if (!neverSites.includes(location.hostname)) {
       const lang = detectPageLanguage(document);
       if (lang && lang !== 'zh') topBar.show(lang);
     }
 
-    // Observer: re-translate when new content appears (SPA nav, infinite scroll)
+    // Observer
     const observer = new ContentObserver(() => {
       if (isTranslated && Date.now() - lastTranslateTime > COOLDOWN) {
         doTranslate();
@@ -89,16 +94,4 @@ function restore(): void {
   restoreTextNodes();
   isTranslated = false;
   ball.setTranslated(false);
-}
-
-async function getNeverTranslate(): Promise<string[]> {
-  return (await browser.storage.local.get('neverTranslate')).neverTranslate as string[] || [];
-}
-
-async function rememberNeverTranslate(): Promise<void> {
-  const sites = await getNeverTranslate();
-  if (!sites.includes(location.hostname)) {
-    sites.push(location.hostname);
-    await browser.storage.local.set({ neverTranslate: sites });
-  }
 }

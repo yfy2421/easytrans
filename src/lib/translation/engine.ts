@@ -7,12 +7,15 @@ import { injectTranslations } from '@/lib/dom/injector';
 import { replaceTextNodes, restoreTextNodes, isReplaceable } from '@/lib/dom/replacer';
 import { matchRule } from '@/lib/rules/engine';
 import type { TranslateResponseMsg } from '@/lib/messages';
+import type { TranslationEngine as EngineType } from '@/lib/translator/types';
 
 export type TranslationMode = 'append' | 'replace';
 
 export interface EngineConfig {
   mode: TranslationMode;
   targetLang: string;
+  /** Translation engine to use (default: 'google') */
+  engine: EngineType;
   /** Called when batches start/complete */
   onProgress?: (phase: 'extract' | 'translate' | 'apply' | 'done') => void;
 }
@@ -130,7 +133,7 @@ export class TranslationEngine {
     if (allLinkWords.length > 0) {
       const wr = await browser.runtime.sendMessage({
         type: 'TRANSLATE_REQUEST', texts: allLinkWords,
-        sourceLang: 'auto', targetLang, engine: 'google',
+        sourceLang: 'auto', targetLang, engine: this.config.engine,
       }).catch(() => null) as TranslateResponseMsg | null;
       if (wr?.translations) {
         for (let i = 0; i < allLinkWords.length; i++) {
@@ -185,7 +188,7 @@ export class TranslationEngine {
         try {
           const r: TranslateResponseMsg = await browser.runtime.sendMessage({
             type: 'TRANSLATE_REQUEST', texts,
-            sourceLang: 'auto', targetLang, engine: 'google',
+            sourceLang: 'auto', targetLang, engine: this.config.engine,
           });
 
           for (let j = 0; j < batch.length; j++) {

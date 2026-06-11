@@ -52,6 +52,14 @@ export const BUILTIN_RULES: SiteRule[] = [
     containerSelectors: ['[data-testid=comment]', '.Comment__body', 'faceplate-batch .md'],
     detectLanguage: true,
   },
+  // Old Reddit compact — must come before oldReddit (hostname match would catch .compact URLs)
+  {
+    name: 'oldRedditCompact',
+    regex: 'old\\.reddit\\.com.*\\/\\.compact$',
+    selectors: ['.title > a'],
+    containerSelectors: ['.usertext-body'],
+    detectLanguage: true,
+  },
   // Old Reddit
   {
     name: 'oldReddit',
@@ -104,6 +112,7 @@ export const BUILTIN_RULES: SiteRule[] = [
   {
     name: 'arxiv',
     hostname: 'arxiv.org',
+    selectors: ['blockquote.abstract', 'h1.title', 'h2', 'h3'],
     containerSelectors: '#content',
   },
   // Discord
@@ -174,6 +183,7 @@ export const BUILTIN_RULES: SiteRule[] = [
       'article h3', 'article .single-story-module__headline-link',
       'article [data-tracking-type=Story]', 'article .story-list-story__info__headline',
     ],
+    containerSelectors: 'article',
   },
   // Yahoo Finance
   {
