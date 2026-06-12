@@ -1,62 +1,65 @@
 /**
- * 页面语言检测 — 从 html[lang] 或文本内容推断页面语言。
+ * 页面语言检测 — 使用 Chrome 内置 CLD3 语言检测器
+ * （跟 chrome.runtime.detectLanguage / 右键翻译同款引擎）。
+ * 比手动统计字符密度准确得多，中文页面不会被误判为西班牙语。
  */
-
-// High-frequency words per language (lowercase) for statistical detection
-const LANG_MARKERS: Record<string, string[]> = {
-  en: ['the', 'is', 'are', 'was', 'were', 'and', 'that', 'this', 'with', 'for', 'from', 'have', 'has', 'not', 'but', 'you', 'all', 'can', 'will', 'your'],
-  zh: ['的', '是', '在', '了', '和', '不', '我', '有', '这', '人', '中', '大', '为', '上', '个', '们', '到', '说', '时', '要'],
-  ja: ['の', 'に', 'は', 'を', 'た', 'が', 'で', 'て', 'と', 'し', 'れ', 'さ', 'る', 'す', 'ん', 'な', 'い', 'ま', 'か', 'も'],
-  ko: ['이', '가', '은', '는', '을', '를', '에', '의', '로', '고', '다', '서', '도', '지', '게', '하', '기', '한', '있', '습'],
-  fr: ['le', 'la', 'les', 'des', 'est', 'une', 'dans', 'pas', 'plus', 'sur', 'par', 'nous', 'vous', 'aux', 'ses', 'fait', 'leur', 'très', 'bien', 'avec'],
-  de: ['der', 'die', 'das', 'ein', 'eine', 'und', 'ist', 'nicht', 'mit', 'auf', 'von', 'den', 'dem', 'des', 'war', 'wie', 'auch', 'bei', 'nach', 'über'],
-  es: ['que', 'los', 'las', 'una', 'con', 'por', 'del', 'como', 'más', 'está', 'son', 'han', 'era', 'sus', 'ese', 'fue', 'ese', 'otro', 'hace', 'muy'],
-  ru: ['что', 'это', 'как', 'так', 'для', 'все', 'его', 'она', 'они', 'был', 'быть', 'весь', 'год', 'мой', 'наш', 'или', 'если', 'уже', 'кто', 'даже'],
-};
-
-function countMatches(text: string, markers: string[]): number {
-  const lower = text.toLowerCase();
-  let count = 0;
-  for (const m of markers) {
-    let idx = 0;
-    while ((idx = lower.indexOf(m, idx)) !== -1) {
-      count++;
-      idx += m.length;
-    }
-  }
-  return count;
-}
 
 /**
- * Detect page language from html[lang] attribute or text content analysis.
+ * Detect page language from html[lang] attribute or Chrome's built-in detector.
  * Returns ISO 639-1 code or null if detection fails.
  */
-export function detectPageLanguage(doc: Document): string | null {
+export async function detectPageLanguage(doc: Document): Promise<string | null> {
   const htmlEl = doc.documentElement;
 
-  // Priority 1: html[lang] attribute
+  // Priority 1: html[lang] attribute (instant, no API call)
   const lang = htmlEl.getAttribute('lang')?.toLowerCase();
   if (lang && lang.length >= 2) {
     return lang.slice(0, 2);
   }
 
-  // Priority 2: text content analysis (body may not exist at document_start)
-  const bodyText = doc.body?.textContent || '';
-  const text = bodyText.slice(0, 2000); // First 2000 chars is enough
-
-  if (text.trim().length < 20) return null;
-
-  let bestLang: string | null = null;
-  let bestScore = 0;
-
-  for (const [code, markers] of Object.entries(LANG_MARKERS)) {
-    const score = countMatches(text, markers);
-    if (score > bestScore) {
-      bestScore = score;
-      bestLang = code;
+  // Priority 2: Chrome's built-in CLD3 model (callback-based API)
+  try {
+    const text = doc.body?.textContent?.slice(0, 2000) || '';
+    if (text.trim().length < 20) return null;
+    const result = await new Promise<{ languages: Array<{ language: string; percentage: number }> }>((resolve) => {
+      chrome.i18n.detectLanguage(text, resolve);
+    });
+    if (result?.languages?.length > 0) {
+      return result.languages[0].language;
     }
+  } catch {
+    // chrome.i18n unavailable — fall back to character density
+    return detectByCharDensity(doc.body?.textContent?.slice(0, 2000) || '');
   }
 
-  // Require minimum confidence
-  return bestScore >= 2 ? bestLang : null;
+  return null;
+}
+
+// ── Fallback: character-density analysis (for browsers without chrome.i18n, like Safari) ──
+
+const CJK_CHAR_RE = /[一-鿿]/g;
+const HIRAGANA_RE = /[぀-ゟ]/g;
+const KATAKANA_RE = /[゠-ヿ]/g;
+const HANGUL_RE = /[가-힯]/g;
+const CYRILLIC_RE = /[Ѐ-ӿ]/g;
+
+function detectByCharDensity(text: string): string | null {
+  if (text.trim().length < 20) return null;
+  const total = text.length;
+
+  const cjk = text.match(CJK_CHAR_RE);
+  if (cjk && cjk.length / total > 0.15) return 'zh';
+
+  const hira = text.match(HIRAGANA_RE);
+  const kata = text.match(KATAKANA_RE);
+  const kanaRatio = (hira ? hira.length : 0) + (kata ? kata.length : 0);
+  if (kanaRatio / total > 0.10) return 'ja';
+
+  const hangul = text.match(HANGUL_RE);
+  if (hangul && hangul.length / total > 0.10) return 'ko';
+
+  const cyrillic = text.match(CYRILLIC_RE);
+  if (cyrillic && cyrillic.length / total > 0.15) return 'ru';
+
+  return null;
 }

@@ -2,7 +2,7 @@
 import { handleTranslateRequest } from '@/lib/translator/handler';
 import { GoogleAdapter } from '@/lib/translator/google';
 import { registerAdapter, getAdapter, getDefaultEngine } from '@/lib/translator/dispatcher';
-import type { TranslateRequestMsg, TranslateResponseMsg } from '@/lib/messages';
+import type { TranslateRequestMsg, TranslateResponseMsg, DetectLangRequestMsg, DetectLangResponseMsg, ContentMessage } from '@/lib/messages';
 
 // ── Register available adapters (add new engines here) ──
 registerAdapter(new GoogleAdapter());
@@ -14,13 +14,25 @@ export default defineBackground({
 
     browser.runtime.onMessage.addListener(
       (
-        msg: TranslateRequestMsg,
-        _sender,
-        sendResponse: (response: TranslateResponseMsg) => void,
+        msg: ContentMessage & { type: string },
+        sender,
+        sendResponse: (response: any) => void,
       ) => {
         if (msg.type === 'PING') {
           sendResponse({ type: 'TRANSLATE_RESPONSE', translations: [], engine: defaultEngine });
           return false;
+        }
+
+        if (msg.type === 'DETECT_LANG_REQUEST') {
+          const tabId = sender.tab?.id;
+          if (tabId) {
+            chrome.tabs.detectLanguage(tabId, (lang) => {
+              sendResponse({ type: 'DETECT_LANG_RESPONSE', lang: lang !== 'und' ? lang : null });
+            });
+          } else {
+            sendResponse({ type: 'DETECT_LANG_RESPONSE', lang: null });
+          }
+          return true;
         }
 
         if (msg.type === 'TRANSLATE_REQUEST') {

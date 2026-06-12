@@ -137,12 +137,60 @@ export class FloatingBall {
     this.ballBtn.title = active ? '点击还原原文' : '点击翻译此页';
   }
 
+  /** Show a toast bubble next to the ball, auto-dismiss after `duration` ms */
+  toast(msg: string, duration = 2500): void {
+    if (!this.ballBtn) return;
+    this.dismissToast();
+
+    const rect = this.ballBtn.getBoundingClientRect();
+    const bubble = this.doc.createElement('div');
+    bubble.textContent = msg;
+    Object.assign(bubble.style, {
+      position: 'fixed',
+      left: `${rect.left - 12}px`,
+      top: `${rect.top + rect.height / 2}px`,
+      transform: 'translate(-100%, -50%)',
+      background: '#1f2937',
+      color: '#f9fafb',
+      padding: '6px 12px',
+      borderRadius: '6px',
+      fontSize: '13px',
+      whiteSpace: 'nowrap',
+      boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
+      pointerEvents: 'none',
+      zIndex: '2147483647',
+      transition: 'opacity 0.3s',
+    });
+    this.doc.body.appendChild(bubble);
+    this._toastEl = bubble;
+    this._toastTimer = window.setTimeout(() => {
+      bubble.style.opacity = '0';
+      window.setTimeout(() => { bubble.remove(); if (this._toastEl === bubble) this._toastEl = undefined; }, 300);
+    }, duration);
+  }
+
+  private dismissToast(): void {
+    if (this._toastTimer) { clearTimeout(this._toastTimer); this._toastTimer = undefined; }
+    if (this._toastEl) { this._toastEl.remove(); this._toastEl = undefined; }
+  }
+
+  private repinToast(): void {
+    if (!this._toastEl || !this.ballBtn) return;
+    const rect = this.ballBtn.getBoundingClientRect();
+    this._toastEl.style.left = `${rect.left - 12}px`;
+    this._toastEl.style.top = `${rect.top + rect.height / 2}px`;
+  }
+
+  private _toastTimer: ReturnType<typeof setTimeout> | undefined;
+  private _toastEl: HTMLDivElement | undefined;
+
   setPosition(x: number, y: number): void {
     const vw = this.doc.defaultView?.innerWidth || 1024;
     const vh = this.doc.defaultView?.innerHeight || 768;
     this.x = Math.max(-20, Math.min(x, vw - 20));
     this.y = Math.max(-20, Math.min(y, vh - 20));
     this.applyPosition();
+    this.repinToast();
   }
 
   getPosition(): { x: number; y: number } {

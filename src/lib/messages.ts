@@ -18,6 +18,10 @@ export type PopupMessage = PopupTranslateMsg | PopupRestoreMsg;
 
 // ── Content Script → Background ──
 
+export interface DetectLangRequestMsg {
+  type: 'DETECT_LANG_REQUEST';
+}
+
 export interface TranslateRequestMsg {
   type: 'TRANSLATE_REQUEST';
   texts: string[];
@@ -26,9 +30,14 @@ export interface TranslateRequestMsg {
   engine: TranslationEngine;
 }
 
-export type ContentMessage = TranslateRequestMsg;
+export type ContentMessage = TranslateRequestMsg | DetectLangRequestMsg;
 
 // ── Background → Content Script ──
+
+export interface DetectLangResponseMsg {
+  type: 'DETECT_LANG_RESPONSE';
+  lang: string | null;
+}
 
 export interface TranslateResponseMsg {
   type: 'TRANSLATE_RESPONSE';
@@ -37,4 +46,4 @@ export interface TranslateResponseMsg {
   error?: string;
 }
 
-export type BackgroundMessage = TranslateResponseMsg;
+export type BackgroundMessage = TranslateResponseMsg | DetectLangResponseMsg;
